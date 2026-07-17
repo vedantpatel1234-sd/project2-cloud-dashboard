@@ -60,7 +60,11 @@ def GetClusters(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("GetClusters triggered")
     try:
         df = load_dataframe()
-        sample = df.groupby("Diet_type").apply(lambda g: g.sample(min(10, len(g)))[["Protein(g)", "Carbs(g)"]].to_dict(orient="records")).to_dict()
+        # NOTE: now includes Fat(g) alongside Protein(g)/Carbs(g) so the frontend
+        # can compute a real, per-diet Protein/Carbs/Fat correlation (heatmap).
+        sample = df.groupby("Diet_type").apply(
+            lambda g: g.sample(min(10, len(g)))[["Protein(g)", "Carbs(g)", "Fat(g)"]].to_dict(orient="records")
+        ).to_dict()
         return func.HttpResponse(json.dumps(sample), mimetype="application/json", status_code=200)
     except Exception as e:
         logging.error(f"Error in GetClusters: {e}")
