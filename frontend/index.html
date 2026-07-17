@@ -135,11 +135,11 @@
   <p class="meta" id="execTime">Function execution time: —</p>
 
   <h2>Pagination</h2>
-  <div class="pagination">
-    <button onclick="alert('Previous page (wire to real pagination once API is live)')">Previous</button>
-    <button class="active">1</button>
-    <button>2</button>
-    <button onclick="alert('Next page (wire to real pagination once API is live)')">Next</button>
+  <div class="pagination" id="paginationControls">
+    <button id="prevPageBtn">Previous</button>
+    <button class="active" data-page="1">1</button>
+    <button data-page="2">2</button>
+    <button id="nextPageBtn">Next</button>
   </div>
 </main>
 
@@ -152,31 +152,60 @@
 // ------------------------------------------------------------------
 const AZURE_FUNCTION_URL = "https://diet-analysis-func-vp26.azurewebsites.net/api"; // live backend
 
-// Mock data matching Project 1's All_Diets.csv analysis (dash, keto,
-// mediterranean, paleo, vegan). Replace with a real fetch() to
-// AZURE_FUNCTION_URL once the backend is live.
-const dietData = {
-  dash:          { protein: 32, carbs: 140, fat: 45, recipes: 68 },
-  keto:          { protein: 38, carbs: 58,  fat: 92, recipes: 74 },
-  mediterranean: { protein: 29, carbs: 165, fat: 50, recipes: 81 },
-  paleo:         { protein: 41, carbs: 95,  fat: 60, recipes: 59 },
-  vegan:         { protein: 22, carbs: 254, fat: 35, recipes: 66 }
+const ENDPOINTS = {
+  insights: 'getnutritionalinsights',
+  recipes: 'getrecipes',
+  clusters: 'getclusters'
 };
 
-const dietLabels = Object.keys(dietData);
-const dietColors = ["#2f6fed", "#16a34a", "#7c3aed", "#f59e0b", "#ef4444"];
+const dietColors = { dash:"#2f6fed", keto:"#16a34a", mediterranean:"#7c3aed", paleo:"#f59e0b", vegan:"#ef4444" };
+let dietLabels = [];
+
+// Live data fetched from the Azure Function (populated on load)
+let liveInsights = null;   // { average_macros_by_diet, correlation_matrix }
+let liveRecipes = null;    // { recipe_distribution_by_diet, top_protein_recipes }
+let liveClusters = null;   // { dash: [...], keto: [...], ... }
+
+async function fetchJSON(kind){
+  const res = await fetch(`${AZURE_FUNCTION_URL}/${ENDPOINTS[kind]}`);
+  if (!res.ok) throw new Error(`${kind} returned ${res.status}`);
+  return res.json();
+}
+
+async function loadLiveData(){
+  document.getElementById('execTime').textContent = 'Function execution time: loading live data...';
+  const start = performance.now();
+  try {
+    [liveInsights, liveRecipes, liveClusters] = await Promise.all([
+      fetchJSON('insights'),
+      fetchJSON('recipes'),
+      fetchJSON('clusters')
+    ]);
+    dietLabels = Object.keys(liveInsights.average_macros_by_diet);
+    const elapsed = (performance.now() - start).toFixed(0);
+    document.getElementById('execTime').textContent = `Function execution time: ${elapsed} ms (live data loaded from Azure Function)`;
+    buildCharts();
+  } catch (err) {
+    document.getElementById('execTime').textContent = 'Function execution time: error contacting backend (check CORS / URL)';
+    console.error(err);
+  }
+}
 
 function currentSelection(){
   const sel = document.getElementById('dietSelect').value;
-  return sel === 'all' ? dietLabels : [sel];
+  // When a specific diet is chosen, pagination is bypassed (only 1 diet to show).
+  // When "All Diet Types" is chosen, pagination splits the 5 diets across pages.
+  return sel === 'all' ? getPagedDiets() : [sel];
 }
 
 let barChart, scatterChart, pieChart;
 
 function buildCharts(){
+  if (!liveInsights) return; // wait until live data has loaded
   const active = currentSelection();
 
-  // Bar chart: avg macronutrients by diet type
+  // Bar chart: avg macronutrients by diet type (from GetNutritionalInsights)
+  const macros = liveInsights.average_macros_by_diet;
   const barCtx = document.getElementById('barChart');
   if (barChart) barChart.destroy();
   barChart = new Chart(barCtx, {
@@ -184,25 +213,22 @@ function buildCharts(){
     data: {
       labels: active,
       datasets: [
-        { label: 'Protein (g)', data: active.map(d => dietData[d].protein), backgroundColor: '#2f6fed' },
-        { label: 'Carbs (g)',   data: active.map(d => dietData[d].carbs),   backgroundColor: '#16a34a' },
-        { label: 'Fat (g)',     data: active.map(d => dietData[d].fat),     backgroundColor: '#f59e0b' }
+        { label: 'Protein (g)', data: active.map(d => macros[d]['Protein(g)']), backgroundColor: '#2f6fed' },
+        { label: 'Carbs (g)',   data: active.map(d => macros[d]['Carbs(g)']),   backgroundColor: '#16a34a' },
+        { label: 'Fat (g)',     data: active.map(d => macros[d]['Fat(g)']),     backgroundColor: '#f59e0b' }
       ]
     },
     options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{labels:{boxWidth:10,font:{size:10}}}} }
   });
 
-  // Scatter: protein vs carbs, one mock point cluster per diet
+  // Scatter: real protein vs carbs points per diet (from GetClusters)
   const scatterCtx = document.getElementById('scatterChart');
   if (scatterChart) scatterChart.destroy();
-  const scatterDatasets = active.map((d,i) => {
-    const base = dietData[d];
-    const points = Array.from({length: 8}, () => ({
-      x: base.protein + (Math.random()*10 - 5),
-      y: base.carbs + (Math.random()*20 - 10)
-    }));
-    return { label: d, data: points, backgroundColor: dietColors[dietLabels.indexOf(d)] };
-  });
+  const scatterDatasets = active.map(d => ({
+    label: d,
+    data: (liveClusters[d] || []).map(p => ({ x: p['Protein(g)'], y: p['Carbs(g)'] })),
+    backgroundColor: dietColors[d] || '#999'
+  }));
   scatterChart = new Chart(scatterCtx, {
     type: 'scatter',
     data: { datasets: scatterDatasets },
@@ -213,57 +239,46 @@ function buildCharts(){
     }
   });
 
-  // Pie: recipe distribution by diet type
+  // Pie: real recipe distribution by diet type (from GetRecipes)
+  const distribution = liveRecipes.recipe_distribution_by_diet;
   const pieCtx = document.getElementById('pieChart');
   if (pieChart) pieChart.destroy();
   pieChart = new Chart(pieCtx, {
     type: 'pie',
     data: {
       labels: active,
-      datasets: [{ data: active.map(d => dietData[d].recipes), backgroundColor: active.map(d => dietColors[dietLabels.indexOf(d)]) }]
+      datasets: [{ data: active.map(d => distribution[d] || 0), backgroundColor: active.map(d => dietColors[d] || '#999') }]
     },
     options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{labels:{boxWidth:10,font:{size:10}}}} }
   });
 
-  buildHeatmap(active);
+  buildHeatmap();
+  updatePaginationButtons();
 }
 
-function buildHeatmap(active){
-  // Simple correlation-style heatmap: protein/carbs/fat vs each other
-  const metrics = ['protein','carbs','fat'];
-  const avg = m => active.reduce((s,d)=>s+dietData[d][m],0)/active.length;
-  const vals = { protein: avg('protein'), carbs: avg('carbs'), fat: avg('fat') };
-  const max = Math.max(...Object.values(vals));
+function buildHeatmap(){
+  // Real correlation matrix from GetNutritionalInsights
+  const corr = liveInsights.correlation_matrix;
+  const metrics = ['Protein(g)', 'Carbs(g)', 'Fat(g)'];
 
   const el = document.getElementById('heatmap');
   el.innerHTML = '';
   metrics.forEach(rowM => {
     metrics.forEach(colM => {
-      const strength = Math.min(1, (vals[rowM]+vals[colM]) / (2*max));
+      const val = corr[rowM][colM];
       const div = document.createElement('div');
-      div.style.background = `rgba(47,111,237,${0.25 + strength*0.6})`;
-      div.textContent = rowM === colM ? '1.0' : strength.toFixed(2);
+      div.style.background = `rgba(47,111,237,${0.25 + Math.abs(val)*0.6})`;
+      div.textContent = val.toFixed(2);
       el.appendChild(div);
     });
   });
 }
 
-const ENDPOINTS = {
-  insights: 'getnutritionalinsights',
-  recipes: 'getrecipes',
-  clusters: 'getclusters'
-};
-
 async function callFunction(kind){
   const btnLabel = { insights: 'Get Nutritional Insights', recipes: 'Get Recipes', clusters: 'Get Clusters' }[kind];
-  if (!AZURE_FUNCTION_URL){
-    alert(`"${btnLabel}" will call the Azure Function once it's deployed.\nSet AZURE_FUNCTION_URL in the script to wire this up.`);
-    return;
-  }
   const start = performance.now();
   try {
-    const res = await fetch(`${AZURE_FUNCTION_URL}/${ENDPOINTS[kind]}`);
-    const data = await res.json();
+    const data = await fetchJSON(kind);
     const elapsed = (performance.now() - start).toFixed(0);
     document.getElementById('execTime').textContent = `Function execution time: ${elapsed} ms (live from ${btnLabel})`;
     console.log(data);
@@ -271,6 +286,62 @@ async function callFunction(kind){
     document.getElementById('execTime').textContent = 'Function execution time: error contacting backend (check CORS / URL)';
     console.error(err);
   }
+}
+
+// Pagination groups the 5 diet types across 2 pages, so the existing
+// charts (bar/scatter/heatmap/pie) update to show a different subset
+// of diets per page — no new UI elements needed.
+let currentPage = 1;
+const DIETS_PER_PAGE = 3;
+
+function getPagedDiets(){
+  const start = (currentPage - 1) * DIETS_PER_PAGE;
+  return dietLabels.slice(start, start + DIETS_PER_PAGE);
+}
+
+function updatePaginationButtons(){
+  const sel = document.getElementById('dietSelect').value;
+  const controls = document.getElementById('paginationControls');
+  controls.innerHTML = '';
+
+  if (sel !== 'all'){
+    // A specific diet is selected — pagination isn't meaningful, show a single disabled state
+    const btn = document.createElement('button');
+    btn.textContent = 'Previous';
+    btn.disabled = true;
+    controls.appendChild(btn);
+    const oneBtn = document.createElement('button');
+    oneBtn.textContent = '1';
+    oneBtn.classList.add('active');
+    controls.appendChild(oneBtn);
+    const nextDisabled = document.createElement('button');
+    nextDisabled.textContent = 'Next';
+    nextDisabled.disabled = true;
+    controls.appendChild(nextDisabled);
+    return;
+  }
+
+  const totalPages = Math.max(1, Math.ceil(dietLabels.length / DIETS_PER_PAGE));
+
+  const prevBtn = document.createElement('button');
+  prevBtn.textContent = 'Previous';
+  prevBtn.disabled = currentPage === 1;
+  prevBtn.onclick = () => { if (currentPage > 1){ currentPage--; buildCharts(); } };
+  controls.appendChild(prevBtn);
+
+  for (let p = 1; p <= totalPages; p++){
+    const btn = document.createElement('button');
+    btn.textContent = p;
+    if (p === currentPage) btn.classList.add('active');
+    btn.onclick = () => { currentPage = p; buildCharts(); };
+    controls.appendChild(btn);
+  }
+
+  const nextBtn = document.createElement('button');
+  nextBtn.textContent = 'Next';
+  nextBtn.disabled = currentPage === totalPages;
+  nextBtn.onclick = () => { if (currentPage < totalPages){ currentPage++; buildCharts(); } };
+  controls.appendChild(nextBtn);
 }
 
 document.getElementById('dietSelect').addEventListener('change', buildCharts);
@@ -282,7 +353,7 @@ document.getElementById('searchBox').addEventListener('input', (e) => {
   buildCharts();
 });
 
-buildCharts();
+loadLiveData();
 </script>
 </body>
 </html>
