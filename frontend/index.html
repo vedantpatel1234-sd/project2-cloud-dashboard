@@ -133,13 +133,18 @@
     <button class="btn-clusters" onclick="callFunction('clusters')">Get Clusters</button>
   </div>
   <p class="meta" id="execTime">Function execution time: —</p>
+  <div id="resultsPanel" style="display:none; margin-top:10px; background:white; border:1px solid var(--border); border-radius:8px; padding:14px;">
+    <h3 id="resultsTitle" style="margin:0 0 8px; font-size:14px;"></h3>
+    <div id="resultsBody" style="font-size:13px; color:var(--text);"></div>
+  </div>
 
   <h2>Pagination</h2>
-  <div class="pagination" id="paginationControls">
-    <button id="prevPageBtn">Previous</button>
-    <button class="active" data-page="1">1</button>
-    <button data-page="2">2</button>
-    <button id="nextPageBtn">Next</button>
+  <div class="pagination">
+    <button onclick="alert('Pagination is not required for this dashboard and is not wired to live data.')">Previous</button>
+    <button class="active">1</button>
+    <button>2</button>
+    <button onclick="alert('Pagination is not required for this dashboard and is not wired to live data.')">Next</button>
+  </div>
   </div>
 </main>
 
@@ -193,9 +198,7 @@ async function loadLiveData(){
 
 function currentSelection(){
   const sel = document.getElementById('dietSelect').value;
-  // When a specific diet is chosen, pagination is bypassed (only 1 diet to show).
-  // When "All Diet Types" is chosen, pagination splits the 5 diets across pages.
-  return sel === 'all' ? getPagedDiets() : [sel];
+  return sel === 'all' ? dietLabels : [sel];
 }
 
 let barChart, scatterChart, pieChart;
@@ -252,14 +255,43 @@ function buildCharts(){
     options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{labels:{boxWidth:10,font:{size:10}}}} }
   });
 
-  buildHeatmap();
-  updatePaginationButtons();
+  buildHeatmap(active);
 }
 
-function buildHeatmap(){
-  // Real correlation matrix from GetNutritionalInsights
-  const corr = liveInsights.correlation_matrix;
+function pearson(xs, ys){
+  const n = xs.length;
+  if (n < 2) return 0;
+  const meanX = xs.reduce((a,b)=>a+b,0)/n;
+  const meanY = ys.reduce((a,b)=>a+b,0)/n;
+  let num=0, denX=0, denY=0;
+  for (let i=0;i<n;i++){
+    const dx = xs[i]-meanX, dy = ys[i]-meanY;
+    num += dx*dy; denX += dx*dx; denY += dy*dy;
+  }
+  if (denX===0 || denY===0) return 0;
+  return num / Math.sqrt(denX*denY);
+}
+
+function buildHeatmap(active){
+  // Real correlation computed from this diet selection's sampled cluster points
+  // (falls back to the dataset-wide correlation_matrix if a metric is missing
+  // from the sample, e.g. before GetClusters returns Fat(g)).
+  const points = active.flatMap(d => liveClusters[d] || []);
+  const hasFat = points.length > 0 && points[0]['Fat(g)'] !== undefined;
+
   const metrics = ['Protein(g)', 'Carbs(g)', 'Fat(g)'];
+  let corr;
+  if (hasFat && points.length >= 2){
+    const series = {};
+    metrics.forEach(m => series[m] = points.map(p => p[m]));
+    corr = {};
+    metrics.forEach(r => {
+      corr[r] = {};
+      metrics.forEach(c => { corr[r][c] = r===c ? 1 : pearson(series[r], series[c]); });
+    });
+  } else {
+    corr = liveInsights.correlation_matrix; // fallback: dataset-wide stat
+  }
 
   const el = document.getElementById('heatmap');
   el.innerHTML = '';
@@ -282,66 +314,41 @@ async function callFunction(kind){
     const elapsed = (performance.now() - start).toFixed(0);
     document.getElementById('execTime').textContent = `Function execution time: ${elapsed} ms (live from ${btnLabel})`;
     console.log(data);
+    renderResults(kind, btnLabel, data);
   } catch (err) {
     document.getElementById('execTime').textContent = 'Function execution time: error contacting backend (check CORS / URL)';
     console.error(err);
   }
 }
 
-// Pagination groups the 5 diet types across 2 pages, so the existing
-// charts (bar/scatter/heatmap/pie) update to show a different subset
-// of diets per page — no new UI elements needed.
-let currentPage = 1;
-const DIETS_PER_PAGE = 3;
+function renderResults(kind, btnLabel, data){
+  const panel = document.getElementById('resultsPanel');
+  const title = document.getElementById('resultsTitle');
+  const body = document.getElementById('resultsBody');
+  panel.style.display = 'block';
+  title.textContent = `Live result: ${btnLabel}`;
 
-function getPagedDiets(){
-  const start = (currentPage - 1) * DIETS_PER_PAGE;
-  return dietLabels.slice(start, start + DIETS_PER_PAGE);
-}
-
-function updatePaginationButtons(){
-  const sel = document.getElementById('dietSelect').value;
-  const controls = document.getElementById('paginationControls');
-  controls.innerHTML = '';
-
-  if (sel !== 'all'){
-    // A specific diet is selected — pagination isn't meaningful, show a single disabled state
-    const btn = document.createElement('button');
-    btn.textContent = 'Previous';
-    btn.disabled = true;
-    controls.appendChild(btn);
-    const oneBtn = document.createElement('button');
-    oneBtn.textContent = '1';
-    oneBtn.classList.add('active');
-    controls.appendChild(oneBtn);
-    const nextDisabled = document.createElement('button');
-    nextDisabled.textContent = 'Next';
-    nextDisabled.disabled = true;
-    controls.appendChild(nextDisabled);
-    return;
+  if (kind === 'insights'){
+    const rows = Object.entries(data.average_macros_by_diet).map(([diet, m]) =>
+      `<tr><td style="padding:4px 10px;">${diet}</td><td style="padding:4px 10px;">${m['Protein(g)']}</td><td style="padding:4px 10px;">${m['Carbs(g)']}</td><td style="padding:4px 10px;">${m['Fat(g)']}</td></tr>`
+    ).join('');
+    body.innerHTML = `
+      <p style="margin:0 0 6px; color:var(--muted);">Average macronutrients by diet type:</p>
+      <table style="border-collapse:collapse;">
+        <tr style="font-weight:600;"><td style="padding:4px 10px;">Diet</td><td style="padding:4px 10px;">Protein(g)</td><td style="padding:4px 10px;">Carbs(g)</td><td style="padding:4px 10px;">Fat(g)</td></tr>
+        ${rows}
+      </table>`;
+  } else if (kind === 'recipes'){
+    const dist = Object.entries(data.recipe_distribution_by_diet).map(([d,c]) => `${d}: ${c}`).join(', ');
+    const top = data.top_protein_recipes.map(r => `<li>${r.Recipe_name} (${r.Diet_type}) — ${r['Protein(g)']}g protein</li>`).join('');
+    body.innerHTML = `
+      <p style="margin:0 0 6px; color:var(--muted);">Recipe count by diet: ${dist}</p>
+      <p style="margin:6px 0 4px; color:var(--muted);">Top protein recipes:</p>
+      <ul style="margin:0; padding-left:18px;">${top}</ul>`;
+  } else if (kind === 'clusters'){
+    const summary = Object.entries(data).map(([diet, pts]) => `${diet}: ${pts.length} sampled points`).join('<br>');
+    body.innerHTML = `<p style="margin:0; color:var(--muted);">Sampled protein/carbs data points per diet:</p><p style="margin:6px 0 0;">${summary}</p>`;
   }
-
-  const totalPages = Math.max(1, Math.ceil(dietLabels.length / DIETS_PER_PAGE));
-
-  const prevBtn = document.createElement('button');
-  prevBtn.textContent = 'Previous';
-  prevBtn.disabled = currentPage === 1;
-  prevBtn.onclick = () => { if (currentPage > 1){ currentPage--; buildCharts(); } };
-  controls.appendChild(prevBtn);
-
-  for (let p = 1; p <= totalPages; p++){
-    const btn = document.createElement('button');
-    btn.textContent = p;
-    if (p === currentPage) btn.classList.add('active');
-    btn.onclick = () => { currentPage = p; buildCharts(); };
-    controls.appendChild(btn);
-  }
-
-  const nextBtn = document.createElement('button');
-  nextBtn.textContent = 'Next';
-  nextBtn.disabled = currentPage === totalPages;
-  nextBtn.onclick = () => { if (currentPage < totalPages){ currentPage++; buildCharts(); } };
-  controls.appendChild(nextBtn);
 }
 
 document.getElementById('dietSelect').addEventListener('change', buildCharts);
