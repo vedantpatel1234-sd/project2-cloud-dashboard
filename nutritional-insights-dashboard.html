@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Nutritional Insights</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root{
+    --blue: #2f6fed;
+    --blue-dark: #1e4fbe;
+    --bg: #f4f6f9;
+    --card: #ffffff;
+    --text: #1b2430;
+    --muted: #6b7684;
+    --green: #16a34a;
+    --purple: #7c3aed;
+    --border: #e4e8ee;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header, footer{
+    background: var(--blue);
+    color: white;
+    padding: 24px 40px;
+  }
+  header h1{ margin:0; font-size: 28px; font-weight:700; }
+  footer{ text-align:center; font-size: 13px; padding: 18px; margin-top: 40px; }
+  main{ padding: 30px 40px; max-width: 1200px; margin: 0 auto; }
+  h2{ font-size: 19px; margin: 28px 0 14px; }
+  .grid{
+    display:grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px,1fr));
+    gap: 18px;
+  }
+  .card{
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  .card h3{ margin:0 0 4px; font-size:15px; }
+  .card p.sub{ margin:0 0 10px; font-size:12px; color: var(--muted); }
+  .card canvas, .card .heatmap{ width:100% !important; height:180px !important; }
+  .filters-row{ display:flex; gap:12px; flex-wrap:wrap; }
+  input[type=text], select{
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 14px;
+    background: white;
+  }
+  input[type=text]{ min-width: 260px; }
+  .api-buttons{ display:flex; gap:12px; flex-wrap:wrap; }
+  .api-buttons button{
+    padding: 12px 20px;
+    border:none;
+    border-radius: 6px;
+    color:white;
+    font-size:14px;
+    cursor:pointer;
+    font-weight:600;
+  }
+  .btn-insights{ background: var(--blue); }
+  .btn-recipes{ background: var(--green); }
+  .btn-clusters{ background: var(--purple); }
+  .api-buttons button:hover{ filter: brightness(0.92); }
+  .meta{ font-size:12px; color:var(--muted); margin-top:8px; }
+  .pagination{ display:flex; gap:8px; justify-content:center; margin-top:10px; }
+  .pagination button{
+    padding:8px 14px;
+    border:1px solid var(--border);
+    background:white;
+    border-radius:6px;
+    cursor:pointer;
+    font-size:14px;
+  }
+  .pagination button.active{ background: var(--blue); color:white; border-color: var(--blue); }
+  .heatmap{ display:grid; grid-template-columns: repeat(3,1fr); grid-template-rows: repeat(3,1fr); gap:3px; }
+  .heatmap div{ display:flex; align-items:center; justify-content:center; font-size:11px; color:white; border-radius:3px; }
+</style>
+</head>
+<body>
+
+<header><h1>Nutritional Insights</h1></header>
+
+<main>
+  <h2>Explore Nutritional Insights</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>Bar Chart</h3>
+      <p class="sub">Average macronutrient content by diet type.</p>
+      <canvas id="barChart"></canvas>
+    </div>
+    <div class="card">
+      <h3>Scatter Plot</h3>
+      <p class="sub">Nutrient relationships (protein vs carbs).</p>
+      <canvas id="scatterChart"></canvas>
+    </div>
+    <div class="card">
+      <h3>Heatmap</h3>
+      <p class="sub">Nutrient correlations.</p>
+      <div id="heatmap" class="heatmap"></div>
+    </div>
+    <div class="card">
+      <h3>Pie Chart</h3>
+      <p class="sub">Recipe distribution by diet type.</p>
+      <canvas id="pieChart"></canvas>
+    </div>
+  </div>
+
+  <h2>Filters and Data Interaction</h2>
+  <div class="filters-row">
+    <input type="text" id="searchBox" placeholder="Search by Diet Type">
+    <select id="dietSelect">
+      <option value="all">All Diet Types</option>
+      <option value="dash">Dash</option>
+      <option value="keto">Keto</option>
+      <option value="mediterranean">Mediterranean</option>
+      <option value="paleo">Paleo</option>
+      <option value="vegan">Vegan</option>
+    </select>
+  </div>
+
+  <h2>API Data Interaction</h2>
+  <div class="api-buttons">
+    <button class="btn-insights" onclick="callFunction('insights')">Get Nutritional Insights</button>
+    <button class="btn-recipes" onclick="callFunction('recipes')">Get Recipes</button>
+    <button class="btn-clusters" onclick="callFunction('clusters')">Get Clusters</button>
+  </div>
+  <p class="meta" id="execTime">Function execution time: —</p>
+
+  <h2>Pagination</h2>
+  <div class="pagination">
+    <button onclick="alert('Previous page (wire to real pagination once API is live)')">Previous</button>
+    <button class="active">1</button>
+    <button>2</button>
+    <button onclick="alert('Next page (wire to real pagination once API is live)')">Next</button>
+  </div>
+</main>
+
+<footer>&copy; 2026 Nutritional Insights. All Rights Reserved.</footer>
+
+<script>
+// ------------------------------------------------------------------
+// TODO (Vedant): once the Azure Function is deployed, set this to the
+// real endpoint, e.g. "https://<yourfunctionapp>.azurewebsites.net/api"
+// ------------------------------------------------------------------
+const AZURE_FUNCTION_URL = "https://diet-analysis-func-vp26.azurewebsites.net/api"; // live backend
+
+// Mock data matching Project 1's All_Diets.csv analysis (dash, keto,
+// mediterranean, paleo, vegan). Replace with a real fetch() to
+// AZURE_FUNCTION_URL once the backend is live.
+const dietData = {
+  dash:          { protein: 32, carbs: 140, fat: 45, recipes: 68 },
+  keto:          { protein: 38, carbs: 58,  fat: 92, recipes: 74 },
+  mediterranean: { protein: 29, carbs: 165, fat: 50, recipes: 81 },
+  paleo:         { protein: 41, carbs: 95,  fat: 60, recipes: 59 },
+  vegan:         { protein: 22, carbs: 254, fat: 35, recipes: 66 }
+};
+
+const dietLabels = Object.keys(dietData);
+const dietColors = ["#2f6fed", "#16a34a", "#7c3aed", "#f59e0b", "#ef4444"];
+
+function currentSelection(){
+  const sel = document.getElementById('dietSelect').value;
+  return sel === 'all' ? dietLabels : [sel];
+}
+
+let barChart, scatterChart, pieChart;
+
+function buildCharts(){
+  const active = currentSelection();
+
+  // Bar chart: avg macronutrients by diet type
+  const barCtx = document.getElementById('barChart');
+  if (barChart) barChart.destroy();
+  barChart = new Chart(barCtx, {
+    type: 'bar',
+    data: {
+      labels: active,
+      datasets: [
+        { label: 'Protein (g)', data: active.map(d => dietData[d].protein), backgroundColor: '#2f6fed' },
+        { label: 'Carbs (g)',   data: active.map(d => dietData[d].carbs),   backgroundColor: '#16a34a' },
+        { label: 'Fat (g)',     data: active.map(d => dietData[d].fat),     backgroundColor: '#f59e0b' }
+      ]
+    },
+    options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{labels:{boxWidth:10,font:{size:10}}}} }
+  });
+
+  // Scatter: protein vs carbs, one mock point cluster per diet
+  const scatterCtx = document.getElementById('scatterChart');
+  if (scatterChart) scatterChart.destroy();
+  const scatterDatasets = active.map((d,i) => {
+    const base = dietData[d];
+    const points = Array.from({length: 8}, () => ({
+      x: base.protein + (Math.random()*10 - 5),
+      y: base.carbs + (Math.random()*20 - 10)
+    }));
+    return { label: d, data: points, backgroundColor: dietColors[dietLabels.indexOf(d)] };
+  });
+  scatterChart = new Chart(scatterCtx, {
+    type: 'scatter',
+    data: { datasets: scatterDatasets },
+    options: {
+      responsive:true, maintainAspectRatio:false,
+      scales: { x: { title:{display:true,text:'Protein (g)',font:{size:10}} }, y: { title:{display:true,text:'Carbs (g)',font:{size:10}} } },
+      plugins:{legend:{labels:{boxWidth:10,font:{size:10}}}}
+    }
+  });
+
+  // Pie: recipe distribution by diet type
+  const pieCtx = document.getElementById('pieChart');
+  if (pieChart) pieChart.destroy();
+  pieChart = new Chart(pieCtx, {
+    type: 'pie',
+    data: {
+      labels: active,
+      datasets: [{ data: active.map(d => dietData[d].recipes), backgroundColor: active.map(d => dietColors[dietLabels.indexOf(d)]) }]
+    },
+    options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{labels:{boxWidth:10,font:{size:10}}}} }
+  });
+
+  buildHeatmap(active);
+}
+
+function buildHeatmap(active){
+  // Simple correlation-style heatmap: protein/carbs/fat vs each other
+  const metrics = ['protein','carbs','fat'];
+  const avg = m => active.reduce((s,d)=>s+dietData[d][m],0)/active.length;
+  const vals = { protein: avg('protein'), carbs: avg('carbs'), fat: avg('fat') };
+  const max = Math.max(...Object.values(vals));
+
+  const el = document.getElementById('heatmap');
+  el.innerHTML = '';
+  metrics.forEach(rowM => {
+    metrics.forEach(colM => {
+      const strength = Math.min(1, (vals[rowM]+vals[colM]) / (2*max));
+      const div = document.createElement('div');
+      div.style.background = `rgba(47,111,237,${0.25 + strength*0.6})`;
+      div.textContent = rowM === colM ? '1.0' : strength.toFixed(2);
+      el.appendChild(div);
+    });
+  });
+}
+
+const ENDPOINTS = {
+  insights: 'getnutritionalinsights',
+  recipes: 'getrecipes',
+  clusters: 'getclusters'
+};
+
+async function callFunction(kind){
+  const btnLabel = { insights: 'Get Nutritional Insights', recipes: 'Get Recipes', clusters: 'Get Clusters' }[kind];
+  if (!AZURE_FUNCTION_URL){
+    alert(`"${btnLabel}" will call the Azure Function once it's deployed.\nSet AZURE_FUNCTION_URL in the script to wire this up.`);
+    return;
+  }
+  const start = performance.now();
+  try {
+    const res = await fetch(`${AZURE_FUNCTION_URL}/${ENDPOINTS[kind]}`);
+    const data = await res.json();
+    const elapsed = (performance.now() - start).toFixed(0);
+    document.getElementById('execTime').textContent = `Function execution time: ${elapsed} ms (live from ${btnLabel})`;
+    console.log(data);
+  } catch (err) {
+    document.getElementById('execTime').textContent = 'Function execution time: error contacting backend (check CORS / URL)';
+    console.error(err);
+  }
+}
+
+document.getElementById('dietSelect').addEventListener('change', buildCharts);
+document.getElementById('searchBox').addEventListener('input', (e) => {
+  const val = e.target.value.trim().toLowerCase();
+  const match = dietLabels.find(d => d.startsWith(val));
+  if (match) document.getElementById('dietSelect').value = match;
+  else if (val === '') document.getElementById('dietSelect').value = 'all';
+  buildCharts();
+});
+
+buildCharts();
+</script>
+</body>
+</html>
